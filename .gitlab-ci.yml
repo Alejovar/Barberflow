@@ -86,6 +86,8 @@ unit_test_backend:
   stage: unit_test
   image: node:20-alpine
   needs: [install_backend]
+  before_script:
+    - apk add --no-cache openssl1.1-compat
   script:
     - cd backend
     - npx prisma generate
@@ -112,15 +114,23 @@ integration_test_backend:
     MYSQL_PASSWORD: $MYSQL_PASSWORD
     DATABASE_URL: "mysql://$MYSQL_USER:$MYSQL_PASSWORD@db:3306/$MYSQL_DATABASE"
   before_script:
-    - apk add --no-cache mysql-client
+    - apk add --no-cache mysql-client openssl1.1-compat
     - cd backend
     - npx prisma generate
     - |
+      DB_READY=0
       for i in $(seq 1 30); do
-        mysql -h db -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT 1" "$MYSQL_DATABASE" && break
+        if mysql -h db -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --skip-ssl -e "SELECT 1" "$MYSQL_DATABASE"; then
+          DB_READY=1
+          break
+        fi
         echo "Esperando a MySQL... ($i)"
         sleep 2
       done
+      if [ "$DB_READY" -ne 1 ]; then
+        echo "❌ MySQL no respondió a tiempo tras 30 intentos."
+        exit 1
+      fi
     - npx prisma migrate deploy
   script:
     - npm run test:e2e
@@ -133,6 +143,8 @@ coverage_backend:
   stage: coverage
   image: node:20-alpine
   needs: [install_backend]
+  before_script:
+    - apk add --no-cache openssl1.1-compat
   script:
     - cd backend
     - npx prisma generate
@@ -149,6 +161,8 @@ build_backend:
   stage: build
   image: node:20-alpine
   needs: [install_backend]
+  before_script:
+    - apk add --no-cache openssl1.1-compat
   script:
     - cd backend
     - npx prisma generate
@@ -227,6 +241,14 @@ manual_approval:
 
 # ────────────────────────────────────────────────────────────────
 # 10. DEPLOY (100% vía script SSH, a la única instancia EC2 del equipo)
+#
+# El archivo .env se genera LOCALMENTE (en el runner) y se copia por
+# scp, en vez de generarse con un heredoc anidado dentro del comando
+# ssh remoto. Un heredoc dentro de una cadena "..." pasada a ssh es
+# frágil: si el delimitador de cierre queda indentado (por legibilidad
+# del YAML), bash no lo reconoce como fin del heredoc y se traga el
+# resto del script como si fuera contenido del archivo — el job puede
+# terminar en verde sin haber desplegado nada.
 # ────────────────────────────────────────────────────────────────
 deploy:
   stage: deploy
@@ -243,47 +265,57 @@ deploy:
     - ssh "ubuntu@$EC2_IP" "mkdir -p ~/barberflow/docker/nginx"
     - scp docker-compose.production.yml "ubuntu@$EC2_IP:~/barberflow/docker-compose.yml"
     - scp docker/nginx/reverse-proxy.conf "ubuntu@$EC2_IP:~/barberflow/docker/nginx/reverse-proxy.conf"
+
+    # ── Generar .env localmente (sin indentación, heredoc simple y seguro) ──
+    - |
+      cat > .env.deploy <<EOF
+      DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      DB_USER=${DB_USER}
+      DB_PASSWORD=${DB_PASSWORD}
+      JWT_SECRET=${JWT_SECRET}
+      FRONTEND_URL=http://${EC2_IP}:8080
+      BACKEND_IMAGE=${BACKEND_IMAGE}:latest
+      FRONTEND_IMAGE=${FRONTEND_IMAGE}:latest
+      SMTP_HOST=${SMTP_HOST}
+      SMTP_PORT=${SMTP_PORT}
+      SMTP_USER=${SMTP_USER}
+      SMTP_PASSWORD=${SMTP_PASSWORD}
+      SMTP_FROM=${SMTP_FROM}
+      EOF
+    - scp .env.deploy "ubuntu@$EC2_IP:~/barberflow/.env"
+    - rm -f .env.deploy
+
+    # ── Bloque remoto: solo comandos normales, sin heredocs anidados ──
     - |
       ssh "ubuntu@$EC2_IP" "
         set -e
         cd ~/barberflow
 
-        # ── Limpieza de disco antes de desplegar ──
+        echo '🧹 Limpiando imágenes/contenedores no usados...'
         docker system prune -af
-
-        # ── Variables de entorno (inyectadas desde GitLab CI/CD Variables protegidas) ──
-        cat > .env <<ENV
-        DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-        DB_USER=${DB_USER}
-        DB_PASSWORD=${DB_PASSWORD}
-        JWT_SECRET=${JWT_SECRET}
-        FRONTEND_URL=http://${EC2_IP}:8080
-        BACKEND_IMAGE=${BACKEND_IMAGE}:latest
-        FRONTEND_IMAGE=${FRONTEND_IMAGE}:latest
-        SMTP_HOST=${SMTP_HOST}
-        SMTP_PORT=${SMTP_PORT}
-        SMTP_USER=${SMTP_USER}
-        SMTP_PASSWORD=${SMTP_PASSWORD}
-        SMTP_FROM=${SMTP_FROM}
-        ENV
 
         docker login -u '${CI_REGISTRY_USER}' -p '${CI_REGISTRY_PASSWORD}' ${CI_REGISTRY}
         docker compose pull
         docker compose up -d
 
-        # ── Esperar a que MySQL esté disponible ──
         echo '⏳ Esperando MySQL...'
+        DB_READY=0
         for i in \$(seq 1 30); do
-          docker compose exec -T db mysqladmin ping -h localhost -uroot -p'${DB_ROOT_PASSWORD}' --silent && break
+          if docker compose exec -T db mysqladmin ping -h localhost -uroot -p'${DB_ROOT_PASSWORD}' --silent; then
+            DB_READY=1
+            break
+          fi
           sleep 2
         done
+        if [ \"\$DB_READY\" -ne 1 ]; then
+          echo '❌ MySQL no respondió a tiempo tras 30 intentos.'
+          exit 1
+        fi
 
-        # ── Migraciones automáticas vía Prisma (reemplaza scripts .sql manuales) ──
         echo '🗄️ Aplicando migraciones de base de datos...'
         docker compose exec -T backend npx prisma migrate deploy
         echo '✅ Migraciones aplicadas.'
 
-        # ── Seed solo si la base está vacía (idempotente) ──
         docker compose exec -T backend npx prisma db seed || true
       "
   environment:
@@ -301,8 +333,25 @@ smoke_test:
   needs: [deploy]
   script:
     - apk add --no-cache curl
-    - echo "🔍 Verificando /health..."
-    - curl --fail --silent "$API_URL/health" | grep -q '"status"'
+    - |
+      if [ -z "$API_URL" ]; then
+        echo "❌ La variable API_URL no está definida. Configúrala en CI/CD Variables."
+        exit 1
+      fi
+    - echo "🔍 Verificando $API_URL/health..."
+    - |
+      READY=0
+      for i in $(seq 1 10); do
+        RESPONSE=$(curl --fail --silent --show-error "$API_URL/health") && { READY=1; break; }
+        echo "Esperando a que el backend responda... ($i)"
+        sleep 3
+      done
+      if [ "$READY" -ne 1 ]; then
+        echo "❌ El backend no respondió en $API_URL/health"
+        exit 1
+      fi
+    - echo "$RESPONSE"
+    - echo "$RESPONSE" | grep -q '"status"' || (echo "❌ /health no devolvió el campo status esperado" && exit 1)
     - 'echo "✅ Smoke test OK: backend responde correctamente."'
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
