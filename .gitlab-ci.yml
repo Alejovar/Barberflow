@@ -303,6 +303,6 @@ smoke_test:
     - apk add --no-cache curl
     - echo "🔍 Verificando /health..."
     - curl --fail --silent "$API_URL/health" | grep -q '"status"'
-    - echo "✅ Smoke test OK: backend responde correctamente."
+    - 'echo "✅ Smoke test OK: backend responde correctamente."'
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
