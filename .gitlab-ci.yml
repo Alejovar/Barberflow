@@ -107,6 +107,10 @@ integration_test_backend:
   services:
     - name: mysql:8.0
       alias: db
+      # mariadb-client (el "mysql-client" de Alpine) no trae el plugin
+      # caching_sha2_password que MySQL 8 usa por defecto; forzamos el
+      # plugin viejo, compatible con ese cliente.
+      command: ["--default-authentication-plugin=mysql_native_password"]
   variables:
     MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD
     MYSQL_DATABASE: $MYSQL_DATABASE
@@ -311,6 +315,9 @@ deploy:
           echo '❌ MySQL no respondió a tiempo tras 30 intentos.'
           exit 1
         fi
+
+        echo '📊 Memoria disponible antes de migrar:'
+        free -h
 
         echo '🗄️ Aplicando migraciones de base de datos...'
         docker compose exec -T backend npx prisma migrate deploy
