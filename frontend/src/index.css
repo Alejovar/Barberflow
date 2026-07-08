@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-paper text-ink font-body antialiased;
+  }
+  html.dark body {
+    @apply bg-ink text-paper;
+  }
+  ::selection {
+    @apply bg-brass/30;
+  }
+  :focus-visible {
+    outline: 2px solid #B08D57;
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .container-app {
+    @apply mx-auto w-full max-w-6xl px-6;
+  }
+}

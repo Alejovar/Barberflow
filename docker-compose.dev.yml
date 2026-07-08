@@ -1,0 +1,69 @@
+# Entorno de DESARROLLO
+# Uso: docker compose -f docker-compose.dev.yml up
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_dev_pass
+      MYSQL_DATABASE: barberflow
+      MYSQL_USER: barberflow
+      MYSQL_PASSWORD: barberflow_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data_dev:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_dev_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: builder
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed && npm run start:dev"
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "mysql://barberflow:barberflow_pass@db:3306/barberflow"
+      JWT_SECRET: "dev-secret-do-not-use-in-production"
+      JWT_EXPIRES_IN: "8h"
+      PORT: 3000
+      NODE_ENV: development
+      FRONTEND_URL: "http://localhost:5173"
+      SMTP_HOST: "sandbox.smtp.mailtrap.io"
+      SMTP_PORT: 587
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM: "BarberFlow <no-reply@barberflow.com>"
+      THROTTLE_TTL: 60
+      THROTTLE_LIMIT: 100
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: builder
+    command: npm run dev -- --host
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: "http://localhost:3000/api/v1"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  db_data_dev:

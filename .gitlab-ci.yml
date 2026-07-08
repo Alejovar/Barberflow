@@ -1,0 +1,308 @@
+# ════════════════════════════════════════════════════════════════
+# BarberFlow — Pipeline de GitLab CI/CD (versión taller, un solo ambiente)
+# 11 etapas: install → lint → unit → integration → coverage → build
+#            → docker build → push → aprobación manual → deploy → smoke tests
+#
+# Nota: esta es la versión de 12 etapas original, con la fase de
+# "staging" removida — cada equipo solo tiene UNA instancia EC2, así
+# que "deploy" despliega directo ahí. En un proyecto real con más de
+# un ambiente, volverías a separar deploy_staging / deploy_production
+# como en el diseño original.
+# ════════════════════════════════════════════════════════════════
+
+stages:
+  - install
+  - lint
+  - unit_test
+  - integration_test
+  - coverage
+  - build
+  - docker_build
+  - push_registry
+  - manual_approval
+  - deploy
+  - smoke_test
+
+variables:
+  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
+  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
+  MYSQL_DATABASE: barberflow_test
+  MYSQL_ROOT_PASSWORD: root_test_pass
+  MYSQL_USER: barberflow
+  MYSQL_PASSWORD: barberflow_pass
+
+# ────────────────────────────────────────────────────────────────
+# 1. INSTALL
+# ────────────────────────────────────────────────────────────────
+install_backend:
+  stage: install
+  image: node:20-alpine
+  cache:
+    key: backend-${CI_COMMIT_REF_SLUG}
+    paths: [backend/node_modules]
+  script:
+    - cd backend
+    - npm ci
+  artifacts:
+    paths: [backend/node_modules]
+    expire_in: 1 hour
+
+install_frontend:
+  stage: install
+  image: node:20-alpine
+  cache:
+    key: frontend-${CI_COMMIT_REF_SLUG}
+    paths: [frontend/node_modules]
+  script:
+    - cd frontend
+    - npm ci
+  artifacts:
+    paths: [frontend/node_modules]
+    expire_in: 1 hour
+
+# ────────────────────────────────────────────────────────────────
+# 2. LINT
+# ────────────────────────────────────────────────────────────────
+lint_backend:
+  stage: lint
+  image: node:20-alpine
+  needs: [install_backend]
+  script:
+    - cd backend
+    - npm run lint
+
+lint_frontend:
+  stage: lint
+  image: node:20-alpine
+  needs: [install_frontend]
+  script:
+    - cd frontend
+    - npm run lint
+
+# ────────────────────────────────────────────────────────────────
+# 3. UNIT TESTS
+# ────────────────────────────────────────────────────────────────
+unit_test_backend:
+  stage: unit_test
+  image: node:20-alpine
+  needs: [install_backend]
+  script:
+    - cd backend
+    - npx prisma generate
+    - npm run test -- --ci --reporters=default --reporters=jest-junit
+  artifacts:
+    when: always
+    reports:
+      junit: backend/junit.xml
+
+# ────────────────────────────────────────────────────────────────
+# 4. INTEGRATION TESTS (con MySQL real como servicio)
+# ────────────────────────────────────────────────────────────────
+integration_test_backend:
+  stage: integration_test
+  image: node:20-alpine
+  needs: [install_backend]
+  services:
+    - name: mysql:8.0
+      alias: db
+  variables:
+    MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD
+    MYSQL_DATABASE: $MYSQL_DATABASE
+    MYSQL_USER: $MYSQL_USER
+    MYSQL_PASSWORD: $MYSQL_PASSWORD
+    DATABASE_URL: "mysql://$MYSQL_USER:$MYSQL_PASSWORD@db:3306/$MYSQL_DATABASE"
+  before_script:
+    - apk add --no-cache mysql-client
+    - cd backend
+    - npx prisma generate
+    - |
+      for i in $(seq 1 30); do
+        mysql -h db -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT 1" "$MYSQL_DATABASE" && break
+        echo "Esperando a MySQL... ($i)"
+        sleep 2
+      done
+    - npx prisma migrate deploy
+  script:
+    - npm run test:e2e
+  allow_failure: true # el proyecto aún no incluye specs e2e completos; no bloquea el pipeline
+
+# ────────────────────────────────────────────────────────────────
+# 5. COVERAGE
+# ────────────────────────────────────────────────────────────────
+coverage_backend:
+  stage: coverage
+  image: node:20-alpine
+  needs: [install_backend]
+  script:
+    - cd backend
+    - npx prisma generate
+    - npm run test:cov
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+  artifacts:
+    paths: [backend/coverage]
+    expire_in: 1 week
+
+# ────────────────────────────────────────────────────────────────
+# 6. BUILD
+# ────────────────────────────────────────────────────────────────
+build_backend:
+  stage: build
+  image: node:20-alpine
+  needs: [install_backend]
+  script:
+    - cd backend
+    - npx prisma generate
+    - npm run build
+  artifacts:
+    paths: [backend/dist]
+    expire_in: 1 day
+
+build_frontend:
+  stage: build
+  image: node:20-alpine
+  needs: [install_frontend]
+  script:
+    - cd frontend
+    - npm run build
+  artifacts:
+    paths: [frontend/dist]
+    expire_in: 1 day
+
+# ────────────────────────────────────────────────────────────────
+# 7. DOCKER BUILD
+# ────────────────────────────────────────────────────────────────
+docker_build_backend:
+  stage: docker_build
+  image: docker:24
+  services: [docker:24-dind]
+  needs: [build_backend, unit_test_backend]
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build -t $BACKEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $BACKEND_IMAGE:latest ./backend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+docker_build_frontend:
+  stage: docker_build
+  image: docker:24
+  services: [docker:24-dind]
+  needs: [build_frontend]
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build --build-arg VITE_API_URL="$API_URL" -t $FRONTEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $FRONTEND_IMAGE:latest ./frontend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ────────────────────────────────────────────────────────────────
+# 8. PUSH AL REGISTRY
+# ────────────────────────────────────────────────────────────────
+push_registry:
+  stage: push_registry
+  image: docker:24
+  services: [docker:24-dind]
+  needs: [docker_build_backend, docker_build_frontend]
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build -t $BACKEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $BACKEND_IMAGE:latest ./backend
+    - docker build --build-arg VITE_API_URL="$API_URL" -t $FRONTEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $FRONTEND_IMAGE:latest ./frontend
+    - docker push $BACKEND_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker push $BACKEND_IMAGE:latest
+    - docker push $FRONTEND_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker push $FRONTEND_IMAGE:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ────────────────────────────────────────────────────────────────
+# 9. APROBACIÓN MANUAL (gate antes de tocar la máquina real del equipo)
+# ────────────────────────────────────────────────────────────────
+manual_approval:
+  stage: manual_approval
+  image: alpine:latest
+  needs: [push_registry]
+  script:
+    - echo "✅ Imágenes publicadas. Esperando aprobación manual para desplegar."
+  when: manual
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ────────────────────────────────────────────────────────────────
+# 10. DEPLOY (100% vía script SSH, a la única instancia EC2 del equipo)
+# ────────────────────────────────────────────────────────────────
+deploy:
+  stage: deploy
+  image: alpine:latest
+  needs: [manual_approval]
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$EC2_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - ssh-keyscan "$EC2_IP" >> ~/.ssh/known_hosts
+  script:
+    - echo "🚀 Desplegando BarberFlow en $EC2_IP"
+    - ssh "ubuntu@$EC2_IP" "mkdir -p ~/barberflow/docker/nginx"
+    - scp docker-compose.production.yml "ubuntu@$EC2_IP:~/barberflow/docker-compose.yml"
+    - scp docker/nginx/reverse-proxy.conf "ubuntu@$EC2_IP:~/barberflow/docker/nginx/reverse-proxy.conf"
+    - |
+      ssh "ubuntu@$EC2_IP" "
+        set -e
+        cd ~/barberflow
+
+        # ── Limpieza de disco antes de desplegar ──
+        docker system prune -af
+
+        # ── Variables de entorno (inyectadas desde GitLab CI/CD Variables protegidas) ──
+        cat > .env <<ENV
+        DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+        DB_USER=${DB_USER}
+        DB_PASSWORD=${DB_PASSWORD}
+        JWT_SECRET=${JWT_SECRET}
+        FRONTEND_URL=http://${EC2_IP}:8080
+        BACKEND_IMAGE=${BACKEND_IMAGE}:latest
+        FRONTEND_IMAGE=${FRONTEND_IMAGE}:latest
+        SMTP_HOST=${SMTP_HOST}
+        SMTP_PORT=${SMTP_PORT}
+        SMTP_USER=${SMTP_USER}
+        SMTP_PASSWORD=${SMTP_PASSWORD}
+        SMTP_FROM=${SMTP_FROM}
+        ENV
+
+        docker login -u '${CI_REGISTRY_USER}' -p '${CI_REGISTRY_PASSWORD}' ${CI_REGISTRY}
+        docker compose pull
+        docker compose up -d
+
+        # ── Esperar a que MySQL esté disponible ──
+        echo '⏳ Esperando MySQL...'
+        for i in \$(seq 1 30); do
+          docker compose exec -T db mysqladmin ping -h localhost -uroot -p'${DB_ROOT_PASSWORD}' --silent && break
+          sleep 2
+        done
+
+        # ── Migraciones automáticas vía Prisma (reemplaza scripts .sql manuales) ──
+        echo '🗄️ Aplicando migraciones de base de datos...'
+        docker compose exec -T backend npx prisma migrate deploy
+        echo '✅ Migraciones aplicadas.'
+
+        # ── Seed solo si la base está vacía (idempotente) ──
+        docker compose exec -T backend npx prisma db seed || true
+      "
+  environment:
+    name: equipo
+    url: "http://$EC2_IP:8080"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# ────────────────────────────────────────────────────────────────
+# 11. SMOKE TESTS
+# ────────────────────────────────────────────────────────────────
+smoke_test:
+  stage: smoke_test
+  image: alpine:latest
+  needs: [deploy]
+  script:
+    - apk add --no-cache curl
+    - echo "🔍 Verificando /health..."
+    - curl --fail --silent "$API_URL/health" | grep -q '"status"'
+    - echo "✅ Smoke test OK: backend responde correctamente."
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'

@@ -1,0 +1,126 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  FINISHED
+  CANCELLED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(ADMIN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  name        String
+  description String   @db.Text
+  duration    Int // minutos
+  price       Decimal  @db.Decimal(10, 2)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  appointments Appointment[]
+
+  @@map("services")
+}
+
+model Appointment {
+  id             String            @id @default(uuid())
+  customerName   String
+  customerEmail  String
+  customerPhone  String
+  serviceId      String
+  service        Service           @relation(fields: [serviceId], references: [id])
+  date           DateTime // solo fecha (00:00)
+  startTime      String // "HH:mm"
+  endTime        String // "HH:mm" calculado por duración
+  status         AppointmentStatus @default(PENDING)
+  managementToken String           @unique
+  tokenExpiresAt DateTime?
+  notes          String?           @db.Text
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  emailLogs EmailLog[]
+
+  @@index([date])
+  @@index([managementToken])
+  @@map("appointments")
+}
+
+model BusinessHours {
+  id        String   @id @default(uuid())
+  dayOfWeek Int // 0=domingo ... 6=sábado
+  isOpen    Boolean  @default(true)
+  openTime  String // "HH:mm"
+  closeTime String // "HH:mm"
+  breaks    Json? // [{ start: "13:00", end: "14:00" }]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dayOfWeek])
+  @@map("business_hours")
+}
+
+model Holiday {
+  id        String   @id @default(uuid())
+  date      DateTime
+  label     String
+  createdAt DateTime @default(now())
+
+  @@unique([date])
+  @@map("holidays")
+}
+
+model Settings {
+  id            String   @id @default(uuid())
+  businessName  String   @default("BarberFlow")
+  logoUrl       String?
+  address       String?
+  phone         String?
+  email         String?
+  instagram     String?
+  facebook      String?
+  whatsapp      String?
+  cancelWindowHours    Int @default(24)
+  rescheduleWindowHours Int @default(2)
+  updatedAt     DateTime @updatedAt
+
+  @@map("settings")
+}
+
+model EmailLog {
+  id            String       @id @default(uuid())
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  to            String
+  subject       String
+  type          String // CREATED, CONFIRMED, CANCELLED, RESCHEDULED
+  status        String // SENT, FAILED
+  error         String?      @db.Text
+  createdAt     DateTime     @default(now())
+
+  @@map("email_logs")
+}
