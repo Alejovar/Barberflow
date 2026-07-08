@@ -24,4 +24,4 @@ RUN npm ci --omit=dev && npx prisma generate
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
-CMD ["node", "dist/main"]
+CMD ["node", "dist/src/main"]
