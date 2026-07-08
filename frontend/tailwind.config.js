@@ -17,7 +17,7 @@ export default {
         },
         brass: {
           DEFAULT: '#B08D57',
-          bright: '#D4AF7A',
+          bright: '#00ffdd',
           dark: '#8C6D3F',
         },
         moss: {
