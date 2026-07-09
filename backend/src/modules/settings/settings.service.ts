@@ -20,6 +20,7 @@ export class SettingsService {
     // id y updatedAt los genera/controla la base de datos; se descartan
     // aquí aunque el frontend los reenvíe tal cual desde el GET, para
     // que Prisma nunca intente sobreescribirlos con un valor viejo.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { id, updatedAt, ...data } = dto;
 
     return this.prisma.settings.update({
