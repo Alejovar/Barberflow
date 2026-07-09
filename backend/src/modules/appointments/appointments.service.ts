@@ -25,9 +25,7 @@ export class AppointmentsService {
     private settingsService: SettingsService,
   ) {}
 
-  // ─────────────────────────────────────────────────────────
-  // DISPONIBILIDAD
-  // ─────────────────────────────────────────────────────────
+  // DISPONIBILIDAD 
 
   /**
    * Calcula los horarios disponibles para un servicio en una fecha dada,
@@ -88,9 +86,7 @@ export class AppointmentsService {
     return { available: slots.length > 0, reason: null, slots };
   }
 
-  // ─────────────────────────────────────────────────────────
   // CREACIÓN DE CITA (con todas las validaciones del negocio)
-  // ─────────────────────────────────────────────────────────
 
   async create(dto: CreateAppointmentDto) {
     const service = await this.servicesService.findOne(dto.serviceId);
@@ -136,9 +132,7 @@ export class AppointmentsService {
     return appointment;
   }
 
-  // ─────────────────────────────────────────────────────────
   // GESTIÓN POR TOKEN (cliente sin cuenta)
-  // ─────────────────────────────────────────────────────────
 
   async findByToken(token: string) {
     const appointment = await this.prisma.appointment.findUnique({
@@ -200,9 +194,7 @@ export class AppointmentsService {
     return updated;
   }
 
-  // ─────────────────────────────────────────────────────────
   // ADMINISTRACIÓN
-  // ─────────────────────────────────────────────────────────
 
   async findAll(filters: { from?: string; to?: string; status?: string }) {
     return this.prisma.appointment.findMany({
@@ -279,9 +271,7 @@ export class AppointmentsService {
     };
   }
 
-  // ─────────────────────────────────────────────────────────
   // REGLAS DE VALIDACIÓN (privadas)
-  // ─────────────────────────────────────────────────────────
 
   private async validateBookingRules(
     date: Date,

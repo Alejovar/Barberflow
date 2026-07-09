@@ -1,13 +1,4 @@
-# ════════════════════════════════════════════════════════════════
-# BarberFlow — Pipeline de GitLab CI/CD (versión taller, un solo ambiente)
-# 11 etapas: install → lint → unit → integration → coverage → build
-#            → docker build → push → aprobación manual → deploy → smoke tests
-#
-# Nota: esta es la versión de 12 etapas original, con la fase de
-# "staging" removida — cada equipo solo tiene UNA instancia EC2, así
-# que "deploy" despliega directo ahí. En un proyecto real con más de
-# un ambiente, volverías a separar deploy_staging / deploy_production
-# como en el diseño original.
+# BarberFlow — Pipeline of GitLab (version only production, no staging)
 
 stages:
   - install
@@ -30,9 +21,8 @@ variables:
   MYSQL_USER: barberflow
   MYSQL_PASSWORD: barberflow_pass
 
-# ────────────────────────────────────────────────────────────────
 # 1. INSTALL
-# ────────────────────────────────────────────────────────────────
+
 install_backend:
   stage: install
   image: node:20-alpine
@@ -59,9 +49,8 @@ install_frontend:
     paths: [frontend/node_modules]
     expire_in: 1 hour
 
-# ────────────────────────────────────────────────────────────────
 # 2. LINT
-# ────────────────────────────────────────────────────────────────
+
 lint_backend:
   stage: lint
   image: node:20-alpine
@@ -78,9 +67,8 @@ lint_frontend:
     - cd frontend
     - npm run lint
 
-# ────────────────────────────────────────────────────────────────
 # 3. UNIT TESTS
-# ────────────────────────────────────────────────────────────────
+
 unit_test_backend:
   stage: unit_test
   image: node:20-alpine
@@ -96,9 +84,8 @@ unit_test_backend:
     reports:
       junit: backend/junit.xml
 
-# ────────────────────────────────────────────────────────────────
 # 4. INTEGRATION TESTS (con MySQL real como servicio)
-# ────────────────────────────────────────────────────────────────
+
 integration_test_backend:
   stage: integration_test
   image: node:20-alpine
@@ -137,11 +124,10 @@ integration_test_backend:
     - npx prisma migrate deploy
   script:
     - npm run test:e2e
-  allow_failure: true # el proyecto aún no incluye specs e2e completos; no bloquea el pipeline
+  allow_failure: true 
 
-# ────────────────────────────────────────────────────────────────
 # 5. COVERAGE
-# ────────────────────────────────────────────────────────────────
+
 coverage_backend:
   stage: coverage
   image: node:20-alpine
@@ -157,9 +143,8 @@ coverage_backend:
     paths: [backend/coverage]
     expire_in: 1 week
 
-# ────────────────────────────────────────────────────────────────
 # 6. BUILD
-# ────────────────────────────────────────────────────────────────
+
 build_backend:
   stage: build
   image: node:20-alpine
@@ -185,9 +170,8 @@ build_frontend:
     paths: [frontend/dist]
     expire_in: 1 day
 
-# ────────────────────────────────────────────────────────────────
 # 7. DOCKER BUILD
-# ────────────────────────────────────────────────────────────────
+
 docker_build_backend:
   stage: docker_build
   image: docker:24
@@ -210,9 +194,8 @@ docker_build_frontend:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# ────────────────────────────────────────────────────────────────
 # 8. PUSH AL REGISTRY
-# ────────────────────────────────────────────────────────────────
+
 push_registry:
   stage: push_registry
   image: docker:24
@@ -229,30 +212,19 @@ push_registry:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# ────────────────────────────────────────────────────────────────
 # 9. APROBACIÓN MANUAL (gate antes de tocar la máquina real del equipo)
-# ────────────────────────────────────────────────────────────────
 manual_approval:
   stage: manual_approval
   image: alpine:latest
   needs: [push_registry]
   script:
-    - echo "✅ Imágenes publicadas. Esperando aprobación manual para desplegar."
+    - echo "Imágenes publicadas. Esperando aprobación manual para desplegar."
   when: manual
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# ────────────────────────────────────────────────────────────────
-# 10. DEPLOY (100% vía script SSH, a la única instancia EC2 del equipo)
-#
-# El archivo .env se genera LOCALMENTE (en el runner) y se copia por
-# scp, en vez de generarse con un heredoc anidado dentro del comando
-# ssh remoto. Un heredoc dentro de una cadena "..." pasada a ssh es
-# frágil: si el delimitador de cierre queda indentado (por legibilidad
-# del YAML), bash no lo reconoce como fin del heredoc y se traga el
-# resto del script como si fuera contenido del archivo — el job puede
-# terminar en verde sin haber desplegado nada.
-# ────────────────────────────────────────────────────────────────
+# 10. DEPLOY 
+
 deploy:
   stage: deploy
   image: alpine:latest
@@ -269,7 +241,7 @@ deploy:
     - scp docker-compose.production.yml "ubuntu@$EC2_IP:~/barberflow/docker-compose.yml"
     - scp docker/nginx/reverse-proxy.conf "ubuntu@$EC2_IP:~/barberflow/docker/nginx/reverse-proxy.conf"
 
-    # ── Generar .env localmente (sin indentación, heredoc simple y seguro) ──
+    # Generar .env localmente 
     - |
       cat > .env.deploy <<EOF
       DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
@@ -288,20 +260,20 @@ deploy:
     - scp .env.deploy "ubuntu@$EC2_IP:~/barberflow/.env"
     - rm -f .env.deploy
 
-    # ── Bloque remoto: solo comandos normales, sin heredocs anidados ──
+    # Bloque remoto
     - |
       ssh "ubuntu@$EC2_IP" "
         set -e
         cd ~/barberflow
 
-        echo '🧹 Limpiando imágenes/contenedores no usados...'
+        echo 'Limpiando imágenes/contenedores no usados...'
         docker system prune -af
 
         docker login -u '${CI_REGISTRY_USER}' -p '${CI_REGISTRY_PASSWORD}' ${CI_REGISTRY}
         docker compose pull
         docker compose up -d
 
-        echo '⏳ Esperando MySQL...'
+        echo 'Esperando MySQL...'
         DB_READY=0
         for i in \$(seq 1 30); do
           if docker compose exec -T db mysqladmin ping -h localhost -uroot -p'${DB_ROOT_PASSWORD}' --silent; then
@@ -311,16 +283,16 @@ deploy:
           sleep 2
         done
         if [ \"\$DB_READY\" -ne 1 ]; then
-          echo '❌ MySQL no respondió a tiempo tras 30 intentos.'
+          echo 'MySQL no respondió a tiempo tras 30 intentos.'
           exit 1
         fi
 
-        echo '📊 Memoria disponible antes de migrar:'
+        echo 'Memoria disponible antes de migrar:'
         free -h
 
-        echo '🗄️ Aplicando migraciones de base de datos...'
+        echo 'Aplicando migraciones de base de datos...'
         docker compose exec -T backend npx prisma migrate deploy
-        echo '✅ Migraciones aplicadas.'
+        echo 'Migraciones aplicadas.'
 
         docker compose exec -T backend npx prisma db seed || true
       "
@@ -341,7 +313,7 @@ smoke_test:
     - apk add --no-cache curl
     - |
       if [ -z "$API_URL" ]; then
-        echo "❌ La variable API_URL no está definida. Configúrala en CI/CD Variables."
+        echo "La variable API_URL no está definida. Configúrala en CI/CD Variables."
         exit 1
       fi
     - echo "🔍 Verificando $API_URL/health..."
@@ -353,11 +325,11 @@ smoke_test:
         sleep 3
       done
       if [ "$READY" -ne 1 ]; then
-        echo "❌ El backend no respondió en $API_URL/health"
+        echo "X El backend no respondió en $API_URL/health"
         exit 1
       fi
     - echo "$RESPONSE"
-    - echo "$RESPONSE" | grep -q '"status"' || (echo "❌ /health no devolvió el campo status esperado" && exit 1)
-    - 'echo "✅ Smoke test OK: backend responde correctamente."'
+    - echo "$RESPONSE" | grep -q '"status"' || (echo "X /health no devolvió el campo status esperado" && exit 1)
+    - 'echo "Smoke test OK: backend responde correctamente."'
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
