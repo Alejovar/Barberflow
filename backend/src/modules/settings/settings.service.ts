@@ -16,6 +16,15 @@ export class SettingsService {
 
   async update(dto: UpdateSettingsDto) {
     const current = await this.get();
-    return this.prisma.settings.update({ where: { id: current.id }, data: dto });
+
+    // id y updatedAt los genera/controla la base de datos; se descartan
+    // aquí aunque el frontend los reenvíe tal cual desde el GET, para
+    // que Prisma nunca intente sobreescribirlos con un valor viejo.
+    const { id, updatedAt, ...data } = dto;
+
+    return this.prisma.settings.update({
+      where: { id: current.id },
+      data,
+    });
   }
 }
