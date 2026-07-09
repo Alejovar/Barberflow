@@ -248,7 +248,7 @@ deploy:
       DB_USER=${DB_USER}
       DB_PASSWORD=${DB_PASSWORD}
       JWT_SECRET=${JWT_SECRET}
-      FRONTEND_URL=http://${EC2_IP}:8080
+      FRONTEND_URL=http://${EC2_IP}
       BACKEND_IMAGE=${BACKEND_IMAGE}:latest
       FRONTEND_IMAGE=${FRONTEND_IMAGE}:latest
       SMTP_HOST=${SMTP_HOST}
@@ -298,7 +298,7 @@ deploy:
       "
   environment:
     name: equipo
-    url: "http://$EC2_IP:8080"
+    url: "http://$EC2_IP"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
