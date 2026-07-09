@@ -1,29 +1,52 @@
 # BarberFlow
 
-Sistema de reservaciones para barberías — proyecto demostrativo para la clase de **Computación en la Nube**. Full-stack con React + NestJS + MySQL, contenedores Docker y pipeline completo de GitLab CI/CD.
+Sistema de reservaciones para barberías. Aplicación full-stack con arquitectura moderna, pensada para funcionar como un producto real: los clientes reservan citas en línea sin necesidad de crear una cuenta, y el negocio administra todo desde un panel propio.
 
-## Estado del proyecto
+## ¿Qué hace?
 
-Este scaffold es **funcional de extremo a extremo**, no solo estructura vacía:
+- **Clientes**: reservan una cita en 5 pasos (datos personales → servicio → fecha → horario → confirmación), sin registro. Reciben un correo con un enlace único para consultar, reagendar o cancelar su cita.
+- **Administrador**: gestiona servicios, horarios laborales, días festivos, clientes y el estado de cada cita desde un panel con autenticación JWT.
+- **Automático**: el sistema valida disponibilidad en tiempo real (respetando horario laboral, descansos, festivos, domingos y citas ya ocupadas), envía correos automáticos en cada evento (creación, confirmación, cancelación, reagendado), y aplica reglas de negocio como ventanas mínimas para cancelar (24h) o reagendar (2h).
 
-- ✅ Backend NestJS compila sin errores (`npx tsc --noEmit`) y **16 tests unitarios pasan**, cubriendo las 9 reglas de validación de reservaciones (fechas pasadas, domingos, festivos, fuera de horario, descansos, traslapes, duplicados, ventanas de cancelación/reagendado).
-- ✅ Frontend React compila y **genera build de producción** (`npm run build`) sin errores.
-- ✅ Flujo completo de reservación (5 pasos), panel administrativo (dashboard, agenda, clientes, servicios, horarios/festivos, configuración), gestión de citas sin cuenta vía token seguro.
-- ⚠️ Lo que falta por hacer tú mismo antes de producción real: generar el cliente Prisma contra tu propia base de datos (`npx prisma generate` requiere descargar binarios — no se pudo hacer en este entorno sandbox por restricciones de red), correr `docker compose -f docker-compose.dev.yml up` para probar todo junto, configurar tu propio SMTP, y ampliar la suite de integración (`test/health.e2e-spec.ts` es solo el punto de partida).
+## Stack tecnológico
 
-## Arquitectura
+**Frontend**
+- React 19 + Vite + TypeScript
+- Tailwind CSS
+- TanStack Query (manejo de datos del servidor)
+- Zustand (estado global)
+- React Hook Form + Zod (formularios y validación)
+- Framer Motion
+
+**Backend**
+- NestJS + TypeScript
+- Prisma ORM + MySQL 8
+- JWT (autenticación de administrador)
+- class-validator (DTOs y validación)
+- Swagger / OpenAPI
+- Nodemailer (correos transaccionales con plantillas HTML)
+- Jest (pruebas unitarias e integración)
+
+**Infraestructura**
+- Docker + Docker Compose
+- Nginx (proxy inverso en producción)
+- GitLab CI/CD
+
+## Estructura del proyecto
 
 ```
 barberflow/
-├── frontend/          React 19 + Vite + TS + Tailwind + TanStack Query + Zustand
-├── backend/            NestJS + Prisma + MySQL + JWT + Swagger
-├── docker/nginx/       Proxy inverso para producción
-├── docker-compose.dev.yml
-├── docker-compose.production.yml
-└── .gitlab-ci.yml      Pipeline de 12 etapas
+├── frontend/              React + Vite + TypeScript + Tailwind
+├── backend/               NestJS + Prisma + MySQL
+├── docker/nginx/          Configuración del proxy inverso
+├── docker-compose.dev.yml         Entorno de desarrollo local
+├── docker-compose.production.yml  Entorno de producción
+└── .gitlab-ci.yml         Pipeline de CI/CD (11 etapas)
 ```
 
 ## Cómo correrlo en desarrollo
+
+Requiere Docker y Docker Compose instalados.
 
 ```bash
 cp backend/.env.example backend/.env
@@ -31,43 +54,60 @@ cp frontend/.env.example frontend/.env
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-- Frontend: http://localhost:5173
-- Backend + Swagger: http://localhost:3000/api/docs
-- Admin: http://localhost:5173/admin/login → `admin@barberflow.com` / `Admin123!` (creado por el seed)
+Esto levanta MySQL, aplica las migraciones, ejecuta el seed inicial, y arranca backend y frontend en modo desarrollo (con hot reload).
 
-El comando de `backend` en dev ya corre `prisma migrate deploy` + `prisma db seed` automáticamente al levantar el contenedor — no necesitas ejecutar nada manual.
+- **Frontend**: http://localhost:5173
+- **Backend + Swagger**: http://localhost:3000/api/docs
+- **Health check**: http://localhost:3000/api/v1/health
 
-## Automatización end-to-end (tu pregunta original)
+### Acceso al panel de administrador
 
-**Todo lo que se repite en cada despliegue está automatizado en el pipeline**, sin scripts sueltos ni pasos manuales de base de datos:
+```
+http://localhost:5173/admin/login
+```
 
-| Qué | Cómo |
-|---|---|
-| Migraciones de BD | `npx prisma migrate deploy` dentro del contenedor `backend`, ejecutado por SSH desde el job de deploy |
-| Seed inicial | `npx prisma db seed` (idempotente, con `upsert`) |
-| Build + imagen Docker | Etapas `build` y `docker_build` |
-| Publicación a registry | Etapa `push_registry` |
-| Despliegue | SSH + `docker compose up -d` + espera activa de MySQL (igual que el patrón de tu pipeline de ejemplo) |
-| Verificación post-deploy | Etapa `smoke_test` contra `/api/v1/health` |
-| Aprobación a producción | Etapa `manual_approval` (`when: manual`) |
+Credenciales de prueba (creadas por el seed):
+```
+admin@barberflow.com
+Admin123!
+```
 
-Lo único que **no** se repite en cada corrida — y por eso no vive en el pipeline de cada push — es el *bootstrap* del servidor Ubuntu: instalar Docker, Docker Compose, abrir puertos, etc. Eso se hace una sola vez al levantar la VM (puedes scriptearlo aparte con un `bootstrap.sh` si quieres, pero no tiene sentido correrlo en cada `git push`).
+## Modelo de datos
 
-### Variables de entorno que debes configurar en GitLab (Settings → CI/CD → Variables)
+Siete entidades principales, relacionadas entre sí vía Prisma:
 
-`STAGING_VM_IP`, `PRODUCTION_VM_IP`, `VM_USER`, `STAGING_SSH_PRIVATE_KEY`, `PRODUCTION_SSH_PRIVATE_KEY`, `STAGING_DB_ROOT_PASSWORD`, `STAGING_DB_USER`, `STAGING_DB_PASSWORD`, `STAGING_JWT_SECRET`, `STAGING_FRONTEND_URL`, `STAGING_API_URL`, `STAGING_SMTP_*`, y su equivalente `PRODUCTION_*`.
+- `User` — administrador con acceso al panel
+- `Service` — servicios ofrecidos (nombre, duración, precio)
+- `Appointment` — citas, con token único de gestión para el cliente
+- `BusinessHours` — horario laboral por día de la semana, con descansos configurables
+- `Holiday` — días festivos bloqueados
+- `Settings` — configuración general del negocio (nombre, contacto, ventanas de cancelación/reagendado)
+- `EmailLog` — registro de cada correo enviado, con su estado
 
-## Plan de fases sugerido (según lo pedido en la especificación)
+## Reglas de validación de reservaciones
 
-1. **Fase 0 — Arquitectura** ✅ (esto que acabas de recibir)
-2. **Fase 1 — Backend core**: correr migraciones reales, probar cada endpoint con Swagger
-3. **Fase 2 — Frontend conectado**: correr `docker-compose.dev.yml` y validar el flujo de reservación contra el backend real
-4. **Fase 3 — Admin completo**: probar CRUD de servicios, horarios, festivos, configuración
-5. **Fase 4 — Correos**: configurar SMTP real (Mailtrap para pruebas) y validar las 4 plantillas
-6. **Fase 5 — Testing**: ampliar cobertura de integración con Supertest hasta superar 80%
-7. **Fase 6 — CI/CD real**: configurar variables en GitLab, levantar la VM de producción, correr el pipeline completo
+El backend valida, tanto en la creación como en el reagendado de una cita, que no se pueda:
 
-## Credenciales de prueba (seed)
+- Reservar fechas pasadas
+- Reservar fuera del horario laboral configurado
+- Reservar en horarios ya ocupados por otra cita
+- Reservar domingos
+- Reservar en días festivos configurados
+- Reservar durante un descanso configurado
+- Crear una reservación duplicada
+- Cancelar con menos de 24 horas de anticipación
+- Reagendar con menos de 2 horas de anticipación
 
-- Admin: `admin@barberflow.com` / `Admin123!`
-- 5 servicios de ejemplo, horario Lunes–Sábado 09:00–19:00 con descanso 14:00–15:00, domingo cerrado.
+Estas reglas están cubiertas por pruebas unitarias en `backend/src/modules/appointments/appointments.service.spec.ts`.
+
+## CI/CD
+
+El pipeline de GitLab (`.gitlab-ci.yml`) automatiza todo el ciclo: instalación de dependencias, lint, pruebas unitarias, pruebas de integración (contra una base de datos MySQL real), cobertura, build, construcción de imágenes Docker, publicación al registry, un paso de aprobación manual, despliegue por SSH (incluyendo migraciones de base de datos vía `prisma migrate deploy`), y una verificación final de salud (`smoke test`) contra el endpoint `/health`.
+
+## Despliegue en producción
+
+```bash
+docker compose -f docker-compose.production.yml up -d
+```
+
+Requiere las variables de entorno correspondientes (ver `backend/.env.example`): credenciales de base de datos, `JWT_SECRET`, configuración SMTP, y la URL pública del frontend.
