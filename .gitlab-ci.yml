@@ -302,9 +302,8 @@ deploy:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# ────────────────────────────────────────────────────────────────
-# 11. SMOKE TESTS
-# ────────────────────────────────────────────────────────────────
+# 11. SMOKE TESTS -
+
 smoke_test:
   stage: smoke_test
   image: alpine:latest
