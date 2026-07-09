@@ -2,6 +2,21 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class UpdateSettingsDto {
+  // El frontend reenvía el objeto completo que recibió del GET, que
+  // incluye id/updatedAt (generados por la base de datos). Se aceptan
+  // aquí para que el ValidationPipe (forbidNonWhitelisted: true) no
+  // rechace el request completo, pero se descartan explícitamente en
+  // SettingsService.update() — nunca se usan para escribir en BD.
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  updatedAt?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
