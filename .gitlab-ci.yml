@@ -8,7 +8,6 @@
 # que "deploy" despliega directo ahí. En un proyecto real con más de
 # un ambiente, volverías a separar deploy_staging / deploy_production
 # como en el diseño original.
-# ════════════════════════════════════════════════════════════════
 
 stages:
   - install
